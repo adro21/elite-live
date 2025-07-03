@@ -18,6 +18,7 @@ class FabricStockChecker {
       // Initialize services
       await this.googleSheets.initialize();
       await this.googleSheets.createBackorderSheetIfNotExists();
+      await this.googleSheets.createStatusSheetIfNotExists();
       
       // Setup Express server for Railway health checks
       this.setupServer();
@@ -62,6 +63,22 @@ class FabricStockChecker {
     const startTime = new Date();
     logger.info('Starting fabric stock check');
     
+    // Initialize status tracking
+    const status = {
+      overallStatus: 'SUCCESS',
+      loginSuccess: false,
+      totalProcessed: 0,
+      availableCount: 0,
+      etaCount: 0,
+      notFoundCount: 0,
+      errorCount: 0,
+      navigationErrors: 0,
+      timeoutErrors: 0,
+      movedToAvailable: 0,
+      movedToBackorder: 0,
+      newNotFound: 0
+    };
+    
     try {
       // Get fabric data from Google Sheets
       const fabricData = await this.googleSheets.getFabricData();
@@ -69,36 +86,74 @@ class FabricStockChecker {
 
       if (fabricData.length === 0) {
         logger.info('No Unique fabrics found to check');
+        status.overallStatus = 'NO DATA';
         return;
       }
+
+      status.totalProcessed = fabricData.length;
 
       // Initialize scraper
       await this.fabricScraper.initialize();
 
       // Login to Unique portal
-      await this.fabricScraper.loginToUnique();
+      try {
+        await this.fabricScraper.loginToUnique();
+        status.loginSuccess = true;
+        logger.info('Login successful');
+      } catch (loginError) {
+        status.loginSuccess = false;
+        status.overallStatus = 'LOGIN FAILED';
+        logger.error('Login failed:', loginError);
+        throw loginError;
+      }
 
       // Process each fabric
       for (const fabric of fabricData) {
         try {
           logger.info(`Processing fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
           
+          // Get current ETA value to track changes
+          const currentETA = fabric.currentETA || '';
+          
           // Search for the fabric and get ETA info
           const etaInfo = await this.fabricScraper.searchFabric(fabric);
           
-          if (etaInfo) {
-            // Update the ETA in the main sheet
-            await this.googleSheets.updateFabricETA(fabric.rowIndex, etaInfo);
+          if (etaInfo === null) {
+            // ETA is null means the item is available - clear any existing ETA info
+            logger.info(`Fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: Available (clearing any previous ETA)`);
+            await this.googleSheets.updateFabricETA(fabric.rowIndex, '');
+            status.availableCount++;
             
-            // If there's an ETA (not "In Stock"), add to backorder sheet
-            if (etaInfo !== 'In Stock' && etaInfo.trim() !== '') {
-              await this.googleSheets.appendToBackorderSheet(fabric, etaInfo);
+            // Track if this was moved from backorder to available
+            if (currentETA && currentETA !== 'Not Found' && currentETA !== 'Error') {
+              status.movedToAvailable++;
             }
             
-            logger.info(`Updated fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: ${etaInfo}`);
-          } else {
+          } else if (etaInfo === false) {
+            // etaInfo is false means fabric was not found
             logger.warn(`Could not find fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
             await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Not Found');
+            status.notFoundCount++;
+            
+            // Track if this is a new "Not Found"
+            if (currentETA !== 'Not Found') {
+              status.newNotFound++;
+            }
+            
+          } else {
+            // etaInfo contains actual ETA information (backorder, dates, etc.)
+            await this.googleSheets.updateFabricETA(fabric.rowIndex, etaInfo);
+            
+            // Add to backorder sheet since it has ETA info
+            await this.googleSheets.appendToBackorderSheet(fabric, etaInfo);
+            
+            logger.info(`Updated fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: ${etaInfo}`);
+            status.etaCount++;
+            
+            // Track if this was moved from available to backorder
+            if (!currentETA || currentETA === '') {
+              status.movedToBackorder++;
+            }
           }
           
           // Add a small delay to avoid overwhelming the server
@@ -107,19 +162,47 @@ class FabricStockChecker {
         } catch (error) {
           logger.error(`Error processing fabric ${fabric.supplierPattern} - ${fabric.supplierColor}:`, error);
           await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Error');
+          status.errorCount++;
+          
+          // Categorize error types
+          if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+            status.timeoutErrors++;
+          } else if (error.message.includes('navigation') || error.message.includes('not found in sidebar')) {
+            status.navigationErrors++;
+          }
         }
       }
 
       this.lastRunTime = new Date().toISOString();
       const duration = new Date() - startTime;
+      const durationMinutes = Math.round(duration / 60000 * 100) / 100; // Round to 2 decimal places
+      
+      status.durationMinutes = durationMinutes;
+      
+      // Update overall status based on results
+      if (status.errorCount > 0) {
+        status.overallStatus = `SUCCESS (${status.errorCount} errors)`;
+      }
+      if (status.errorCount > status.totalProcessed * 0.1) { // More than 10% errors
+        status.overallStatus = 'PARTIAL FAILURE';
+      }
+      
       logger.info(`Fabric stock check completed in ${duration}ms`);
 
     } catch (error) {
       logger.error('Error during fabric stock check:', error);
+      status.overallStatus = 'FAILED';
       throw error;
     } finally {
       // Always close the browser
       await this.fabricScraper.close();
+      
+      // Always update status sheet, even if there were errors
+      try {
+        await this.googleSheets.updateStatusSheet(status);
+      } catch (statusError) {
+        logger.error('Failed to update status sheet:', statusError);
+      }
     }
   }
 

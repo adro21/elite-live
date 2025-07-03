@@ -69,6 +69,7 @@ class FabricScraper {
           fabricCollectionsLink.click()
         ]);
         logger.info('Navigated to Fabric Collections');
+        
       } else {
         throw new Error('Could not find Fabric Collections link');
       }
@@ -78,6 +79,7 @@ class FabricScraper {
       throw error;
     }
   }
+
 
   async searchFabric(fabricData) {
     try {
@@ -89,146 +91,331 @@ class FabricScraper {
       // Navigate to the specific collection
       await this.navigateToCollection(supplierCollection);
       
-      // Search for the pattern
-      const patternFound = await this.findPattern(supplierPattern);
-      if (!patternFound) {
-        logger.warn(`Pattern not found: ${supplierPattern}`);
-        return null;
+      // Wait a moment for page to load
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Check if we're already in a product listing page (like Loft)
+      // If we see product links with colors directly, skip pattern search
+      const productLinks = await this.page.$$('a');
+      let hasDirectProductColors = false;
+      
+      for (let link of productLinks) { // Check all links
+        const linkText = await this.page.evaluate(el => el.textContent.trim(), link);
+        if (linkText.includes('Color:')) {
+          hasDirectProductColors = true;
+          logger.info(`Found direct product color link: ${linkText.substring(0, 50)}...`);
+          break;
+        }
       }
       
-      // Search for the color
-      const colorFound = await this.findColor(supplierColor);
-      if (!colorFound) {
-        logger.warn(`Color not found: ${supplierColor}`);
-        return null;
+      if (hasDirectProductColors) {
+        logger.info(`Collection has direct product colors, skipping pattern search for ${supplierPattern}`);
+        // Go directly to color search
+        if (supplierColor && supplierColor.trim() !== '') {
+          const colorFound = await this.findPatternOrColor(supplierColor);
+          if (!colorFound) {
+            logger.warn(`Color not found: ${supplierColor}`);
+            await this.returnToCollectionsPage();
+            return false; // Not found
+          }
+        } else {
+          logger.warn(`No color specified for direct product collection`);
+          await this.returnToCollectionsPage();
+          return false; // Not found
+        }
+      } else {
+        // Try to find the pattern first (for collections like Sheer Collective)
+        const patternFound = await this.findPatternOrColor(supplierPattern);
+        if (!patternFound) {
+          logger.warn(`Pattern not found: ${supplierPattern}`);
+          await this.returnToCollectionsPage();
+          return false; // Not found
+        }
+        
+        // If pattern found, now look for color (if color is specified)
+        if (supplierColor && supplierColor.trim() !== '') {
+          const colorFound = await this.findPatternOrColor(supplierColor);
+          if (!colorFound) {
+            logger.warn(`Color not found: ${supplierColor}`);
+            await this.returnToCollectionsPage();
+            return false; // Not found
+          }
+        }
       }
       
       // Extract ETA information
       const etaInfo = await this.extractETAInfo();
       
       logger.info(`Found ETA info for ${supplierPattern} - ${supplierColor}: ${etaInfo}`);
+      
+      // Return to collections page for next search
+      await this.returnToCollectionsPage();
       return etaInfo;
       
     } catch (error) {
-      logger.error(`Error searching for fabric ${supplierPattern} - ${supplierColor}:`, error);
-      return null;
+      logger.error(`Error searching for fabric ${fabricData.supplierPattern} - ${fabricData.supplierColor}:`, error);
+      // Return to collections page for next search
+      await this.returnToCollectionsPage();
+      return false; // Error means not found
+    }
+  }
+
+  async returnToCollectionsPage() {
+    try {
+      const config = supplierConfigs.unique;
+      
+      // Navigate directly to the fabric collections URL
+      await this.page.goto('https://uniquefinefabrics.mi-amigo.net/amigo/?Path=Home/Fabric%20Collections', { 
+        waitUntil: 'networkidle2' 
+      });
+      
+      logger.info('Returned to Fabric Collections page via direct navigation');
+      
+    } catch (error) {
+      logger.error('Error returning to collections page:', error.message);
+      throw error;
     }
   }
 
   async navigateToCollection(collectionName) {
     try {
       const config = supplierConfigs.unique;
+      logger.info(`Searching for collection: ${collectionName} using sidebar navigation`);
       
-      // Wait for collections to load
-      await this.page.waitForSelector(config.selectors.collections, { timeout: 10000 });
+      // First, navigate to the main collections page to get the sidebar
+      const fabricCollectionsLink = await this.page.$(config.postLoginNavigation.fabricCollectionsSelector);
+      if (fabricCollectionsLink) {
+        await Promise.all([
+          this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
+          fabricCollectionsLink.click()
+        ]);
+        logger.info('Navigated to Fabric Collections page');
+      }
       
-      // Find and click the matching collection
-      const collections = await this.page.$$(config.selectors.collections);
+      // Wait for sidebar to load
+      await this.page.waitForSelector(config.selectors.sidebar, { timeout: 10000 });
       
-      for (let collection of collections) {
-        const nameElement = await collection.$(config.selectors.collectionName);
-        if (nameElement) {
-          const name = await this.page.evaluate(el => el.textContent.trim(), nameElement);
-          if (name.toLowerCase().includes(collectionName.toLowerCase())) {
-            await Promise.all([
-              this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              collection.click()
-            ]);
-            logger.info(`Navigated to collection: ${collectionName}`);
-            return true;
-          }
+      // Look for the collection in the sidebar
+      const sidebarLinks = await this.page.$$(config.selectors.sidebarLinks);
+      
+      for (let link of sidebarLinks) {
+        const linkText = await this.page.evaluate(el => el.textContent.trim(), link);
+        
+        // Check if the link text matches our collection name
+        if (linkText.toLowerCase().includes(collectionName.toLowerCase())) {
+          logger.info(`Found "${collectionName}" in sidebar: ${linkText}`);
+          
+          // Click the link
+          await Promise.all([
+            this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            link.click()
+          ]);
+          
+          logger.info(`✅ Successfully navigated to collection: ${collectionName}`);
+          return true;
         }
       }
       
-      throw new Error(`Collection not found: ${collectionName}`);
+      throw new Error(`Collection "${collectionName}" not found in sidebar`);
+      
     } catch (error) {
       logger.error(`Error navigating to collection ${collectionName}:`, error);
       throw error;
     }
   }
 
-  async findPattern(patternName) {
+
+  async goToNextColorPage() {
     try {
       const config = supplierConfigs.unique;
       
-      // Wait for patterns to load
-      await this.page.waitForSelector(config.selectors.patterns, { timeout: 10000 });
+      // Check if pagination exists
+      const paginationExists = await this.page.$(config.selectors.pagination);
+      if (!paginationExists) {
+        return false;
+      }
       
-      // Find and click the matching pattern
-      const patterns = await this.page.$$(config.selectors.patterns);
-      
-      for (let pattern of patterns) {
-        const nameElement = await pattern.$(config.selectors.patternName);
-        if (nameElement) {
-          const name = await this.page.evaluate(el => el.textContent.trim(), nameElement);
-          if (name.toLowerCase().includes(patternName.toLowerCase())) {
-            await Promise.all([
-              this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              pattern.click()
-            ]);
-            logger.info(`Found and clicked pattern: ${patternName}`);
-            return true;
+      // Try to find and click the ">" (next) button
+      const nextArrowButton = await this.page.evaluateHandle((paginationSelector) => {
+        const pagination = document.querySelector(paginationSelector);
+        if (pagination) {
+          const inputs = pagination.querySelectorAll('input[type="submit"]');
+          for (let input of inputs) {
+            const value = input.value.trim();
+            if ((value === '>' || value === '&gt;') && !input.disabled) {
+              return input;
+            }
           }
+        }
+        return null;
+      }, config.selectors.pagination);
+      
+      if (nextArrowButton && nextArrowButton.asElement()) {
+        try {
+          const currentContent = await this.page.$eval(config.selectors.pagination, el => el.innerHTML);
+          await nextArrowButton.asElement().click();
+          
+          await this.page.waitForFunction(
+            (paginationSelector, oldContent) => {
+              const pagination = document.querySelector(paginationSelector);
+              return pagination && pagination.innerHTML !== oldContent;
+            },
+            { timeout: 15000 },
+            config.selectors.pagination,
+            currentContent
+          );
+          
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          logger.info(`Successfully navigated to next color page`);
+          return true;
+        } catch (navError) {
+          logger.warn(`Color page navigation failed: ${navError.message}`);
+          return false;
         }
       }
       
       return false;
     } catch (error) {
-      logger.error(`Error finding pattern ${patternName}:`, error);
+      logger.error('Error in goToNextColorPage:', error);
       return false;
     }
   }
 
-  async findColor(colorName) {
+  async findPatternOrColor(searchTerm) {
     try {
       const config = supplierConfigs.unique;
+      logger.info(`Looking for pattern/color: ${searchTerm}`);
       
-      // Wait for color options to load
-      await this.page.waitForSelector(config.selectors.colorOptions, { timeout: 10000 });
+      // Check if sidebar exists (we should be in a collection page)
+      const sidebarExists = await this.page.$(config.selectors.sidebar);
+      if (!sidebarExists) {
+        logger.warn('Sidebar not found - not in collection page');
+        return false;
+      }
       
-      // Find and click the matching color
-      const colors = await this.page.$$(config.selectors.colorOptions);
+      // Look for the search term in the sidebar links first (for patterns)
+      const sidebarLinks = await this.page.$$(config.selectors.sidebarLinks);
       
-      for (let color of colors) {
-        const nameElement = await color.$(config.selectors.colorName);
-        if (nameElement) {
-          const name = await this.page.evaluate(el => el.textContent.trim(), nameElement);
-          if (name.toLowerCase().includes(colorName.toLowerCase())) {
-            await Promise.all([
-              this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              color.click()
-            ]);
-            logger.info(`Found and clicked color: ${colorName}`);
-            return true;
-          }
+      for (let link of sidebarLinks) {
+        const linkText = await this.page.evaluate(el => el.textContent.trim(), link);
+        
+        // Check if the link text matches our search term
+        if (linkText.toLowerCase().includes(searchTerm.toLowerCase())) {
+          logger.info(`Found "${searchTerm}" in sidebar: ${linkText}`);
+          
+          // Click the link
+          await Promise.all([
+            this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            link.click()
+          ]);
+          
+          logger.info(`Successfully navigated to: ${linkText}`);
+          return true;
         }
       }
       
+      // If not found in sidebar, look for color codes in all page links with pagination
+      let currentPage = 1;
+      const maxPages = 10; // Safety limit for color pagination
+      
+      while (currentPage <= maxPages) {
+        logger.info(`Searching for color "${searchTerm}" on page ${currentPage}`);
+        
+        const allLinks = await this.page.$$('a');
+        
+        for (let link of allLinks) {
+          const linkText = await this.page.evaluate(el => el.textContent.trim(), link);
+          
+          // Check if the link contains "Color: [searchTerm]"
+          if (linkText.includes(`Color: ${searchTerm}`)) {
+            logger.info(`Found color "${searchTerm}" in product link on page ${currentPage}`);
+            
+            // Click the link
+            await Promise.all([
+              this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
+              link.click()
+            ]);
+            
+            logger.info(`Successfully navigated to product with color: ${searchTerm}`);
+            return true;
+          }
+        }
+        
+        // Try to go to next page within this pattern/collection
+        const nextPageNavigated = await this.goToNextColorPage();
+        if (!nextPageNavigated) {
+          logger.info(`No more color pages available`);
+          break;
+        }
+        currentPage++;
+      }
+      
+      // If not found by exact color match, try the main content area (for patterns)
+      try {
+        await this.page.waitForSelector(config.selectors.patterns, { timeout: 5000 });
+        const items = await this.page.$$(config.selectors.patterns);
+        
+        for (let item of items) {
+          const text = await this.page.evaluate(el => el.textContent.trim(), item);
+          if (text.toLowerCase().includes(searchTerm.toLowerCase())) {
+            await Promise.all([
+              this.page.waitForNavigation({ waitUntil: 'networkidle2' }),
+              item.click()
+            ]);
+            logger.info(`Found and clicked: ${searchTerm}`);
+            return true;
+          }
+        }
+      } catch (e) {
+        // Patterns selector not found, which is fine
+      }
+      
+      logger.info(`"${searchTerm}" not found in sidebar, links, or main content`);
       return false;
+      
     } catch (error) {
-      logger.error(`Error finding color ${colorName}:`, error);
+      logger.error(`Error finding ${searchTerm}:`, error);
       return false;
     }
   }
+
 
   async extractETAInfo() {
     try {
       const config = supplierConfigs.unique;
       
-      // Wait for the ETA element to load
-      await this.page.waitForSelector(config.selectors.etaLabel, { timeout: 5000 });
-      
+      // Check the specific ETA label element first
       const etaElement = await this.page.$(config.selectors.etaLabel);
       if (etaElement) {
         const etaText = await this.page.evaluate(el => el.textContent.trim(), etaElement);
-        return etaText;
+        if (etaText && etaText !== '') {
+          logger.info(`Found ETA info: ${etaText}`);
+          return etaText; // Return actual ETA information (like "Please Call Customer Service", dates, etc.)
+        }
       }
       
-      return 'In Stock'; // If no ETA element, assume it's in stock
+      // If ETA element exists but is empty, or doesn't exist, check for other backorder indicators
+      const bodyText = await this.page.evaluate(() => document.body.textContent);
+      
+      if (bodyText.includes('Please Call Customer Service')) {
+        return 'Please Call Customer Service';
+      }
+      
+      if (bodyText.includes('Out of Stock')) {
+        return 'Out of Stock';
+      }
+      
+      if (bodyText.includes('Backorder')) {
+        return 'Backorder';
+      }
+      
+      // If none of the above, the item is available - return null to leave cell blank
+      logger.info('No ETA/backorder information found - item appears to be available');
+      return null;
+      
     } catch (error) {
-      // If ETA element doesn't exist, it might be in stock
-      logger.info('No ETA element found, assuming item is in stock');
-      return 'In Stock';
+      logger.error('Error extracting ETA info:', error);
+      return null;
     }
   }
 
