@@ -20,8 +20,10 @@ class FabricStockChecker {
       await this.googleSheets.createBackorderSheetIfNotExists();
       await this.googleSheets.createStatusSheetIfNotExists();
       
-      // Setup Express server for Railway health checks
-      this.setupServer();
+      // Setup Express server only if not in GitHub Actions
+      if (process.env.GITHUB_ACTIONS !== 'true') {
+        this.setupServer();
+      }
       
       logger.info('Fabric Stock Checker initialized successfully');
     } catch (error) {
@@ -211,10 +213,10 @@ class FabricStockChecker {
   }
 
   startScheduler() {
-    if (process.env.DEV_MODE === 'true') {
-      logger.info('Running in development mode - executing once');
+    if (process.env.DEV_MODE === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+      logger.info('Running in development or GitHub Actions mode - executing once');
       this.checkFabricStock().catch(error => {
-        logger.error('Development run failed:', error);
+        logger.error('Run failed:', error);
         process.exit(1);
       });
       return;

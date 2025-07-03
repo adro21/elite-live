@@ -292,6 +292,8 @@ class GoogleSheetsService {
 
       const nextRun = process.env.DEV_MODE === 'true' 
         ? 'Development Mode - Manual runs only'
+        : process.env.GITHUB_ACTIONS === 'true'
+        ? 'GitHub Actions - Daily at 1:00 AM EST'
         : 'Daily at 1:00 AM EST';
 
       const statusValues = [
@@ -312,7 +314,7 @@ class GoogleSheetsService {
         [statusInfo.timeoutErrors], // B18 - Timeout Errors
         [''], // B19 - Empty
         [nextRun], // B20 - Next Scheduled Run
-        [process.env.DEV_MODE === 'true' ? 'Development' : 'Production'], // B21 - System Mode
+        [process.env.DEV_MODE === 'true' ? 'Development' : process.env.GITHUB_ACTIONS === 'true' ? 'GitHub Actions' : 'Production'], // B21 - System Mode
         [''], // B22 - Empty
         [''], // B23 - Empty
         [statusInfo.movedToAvailable || 0], // B24 - Items Moved to Available

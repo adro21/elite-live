@@ -1,0 +1,44 @@
+name: Daily Fabric Stock Check
+
+on:
+  schedule:
+    # Run daily at 1 AM EST (6 AM UTC)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  check-fabric-stock:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Run fabric stock check
+      env:
+        UNIQUE_USERNAME: ${{ secrets.UNIQUE_USERNAME }}
+        UNIQUE_PASSWORD: ${{ secrets.UNIQUE_PASSWORD }}
+        GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+        GOOGLE_SERVICE_ACCOUNT_KEY_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY_JSON }}
+        TZ: 'America/New_York'
+        GITHUB_ACTIONS: 'true'
+      run: node index.js
+      
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fabric-check-logs
+        path: |
+          *.log
+          logs/
+        retention-days: 7
