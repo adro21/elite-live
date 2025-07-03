@@ -81,6 +81,9 @@ class FabricStockChecker {
       newNotFound: 0
     };
     
+    // Track current backorder items for syncing
+    const currentBackorderItems = [];
+    
     try {
       // Get fabric data from Google Sheets
       const fabricData = await this.googleSheets.getFabricData();
@@ -146,8 +149,15 @@ class FabricStockChecker {
             // etaInfo contains actual ETA information (backorder, dates, etc.)
             await this.googleSheets.updateFabricETA(fabric.rowIndex, etaInfo);
             
-            // Add to backorder sheet since it has ETA info
-            await this.googleSheets.appendToBackorderSheet(fabric, etaInfo);
+            // Add to current backorder items for syncing later
+            currentBackorderItems.push({
+              supplier: fabric.supplier,
+              supplierCollection: fabric.supplierCollection,
+              supplierPattern: fabric.supplierPattern,
+              supplierColor: fabric.supplierColor,
+              etaValue: etaInfo,
+              rawRow: fabric.rawRow
+            });
             
             logger.info(`Updated fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: ${etaInfo}`);
             status.etaCount++;
@@ -174,6 +184,10 @@ class FabricStockChecker {
           }
         }
       }
+
+      // Sync backorder sheet with current backorder items
+      await this.googleSheets.syncBackorderSheet(currentBackorderItems);
+      logger.info(`Backorder sheet synced with ${currentBackorderItems.length} items`);
 
       this.lastRunTime = new Date().toISOString();
       const duration = new Date() - startTime;

@@ -111,35 +111,48 @@ class GoogleSheetsService {
     }
   }
 
-  async appendToBackorderSheet(fabricData, etaValue) {
+  async syncBackorderSheet(backorderItems) {
     if (!this.initialized) {
       await this.initialize();
     }
 
     try {
-      const timestamp = new Date().toISOString();
-      const backorderRow = [
-        timestamp,
-        fabricData.supplier,
-        fabricData.supplierCollection,
-        fabricData.supplierPattern,
-        fabricData.supplierColor,
-        etaValue,
-        ...fabricData.rawRow.slice(5, 9) // Include columns F-I, exclude ETA column J
-      ];
-
-      await this.sheets.spreadsheets.values.append({
+      // Clear existing data (keep headers)
+      await this.sheets.spreadsheets.values.clear({
         spreadsheetId: this.spreadsheetId,
-        range: 'Backorder!A:Z',
+        range: 'Backorder!A2:Z1000'
+      });
+
+      if (backorderItems.length === 0) {
+        logger.info('No items on backorder - Backorder sheet cleared');
+        return;
+      }
+
+      // Prepare rows for current backorder items
+      const timestamp = new Date().toISOString();
+      const backorderRows = backorderItems.map(item => [
+        timestamp,
+        item.supplier,
+        item.supplierCollection,
+        item.supplierPattern,
+        item.supplierColor,
+        item.etaValue,
+        ...item.rawRow.slice(5, 9) // Include columns F-I, exclude ETA column J
+      ]);
+
+      // Add current backorder items
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.spreadsheetId,
+        range: 'Backorder!A2:Z' + (backorderRows.length + 1),
         valueInputOption: 'RAW',
         resource: {
-          values: [backorderRow]
+          values: backorderRows
         }
       });
 
-      logger.info(`Added fabric to backorder sheet: ${fabricData.supplierPattern} - ${fabricData.supplierColor}`);
+      logger.info(`Synced ${backorderItems.length} items to backorder sheet`);
     } catch (error) {
-      logger.error('Error appending to backorder sheet:', error);
+      logger.error('Error syncing backorder sheet:', error);
       throw error;
     }
   }
@@ -176,13 +189,13 @@ class GoogleSheetsService {
 
         // Add headers to the new sheet
         const headers = [
-          'Timestamp', 'Supplier', 'Collection', 'Pattern', 'Color', 'ETA', 
-          'Additional Info 1', 'Additional Info 2', 'Additional Info 3'
+          'Last Updated', 'Supplier', 'Collection', 'Pattern', 'Color', 'ETA Status', 
+          'Price', 'Pattern Name', 'Color Name', 'Width'
         ];
 
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: this.spreadsheetId,
-          range: 'Backorder!A1:I1',
+          range: 'Backorder!A1:J1',
           valueInputOption: 'RAW',
           resource: {
             values: [headers]
@@ -228,37 +241,31 @@ class GoogleSheetsService {
 
         // Add headers and initial structure to the Status sheet
         const statusData = [
-          ['Fabric Stock Checker - System Status'],
-          [''],
-          ['Last Scrape Information', ''],
-          ['Last Run Date & Time', ''],
-          ['Status', ''],
-          ['Duration (minutes)', ''],
-          ['Total Items Processed', ''],
-          [''],
-          ['Results Summary', ''],
-          ['Items Available (blank)', ''],
-          ['Items with ETA Info', ''],
-          ['Items Not Found', ''],
-          ['Items with Errors', ''],
-          [''],
-          ['System Health', ''],
-          ['Login Success', ''],
-          ['Navigation Errors', ''],
-          ['Timeout Errors', ''],
-          [''],
-          ['Next Scheduled Run', ''],
-          ['System Mode', ''],
-          [''],
-          ['Recent Activity', ''],
-          ['Items Moved to Available', ''],
-          ['Items Moved to Backorder', ''],
-          ['New Not Found Items', '']
+          ['Fabric Stock Checker - System Status', '', '', ''],
+          ['', '', '', ''],
+          ['Metric', 'Value', 'Description', 'Last Updated'],
+          ['', '', '', ''],
+          ['Last Run Status', '', 'Overall result of last execution', ''],
+          ['Run Duration', '', 'Time taken to complete (minutes)', ''],
+          ['Login Status', '', 'Authentication success/failure', ''],
+          ['Items Processed', '', 'Total fabrics checked', ''],
+          ['Items Available', '', 'Items currently in stock', ''],
+          ['Items on Backorder', '', 'Items with ETA information', ''],
+          ['Items Not Found', '', 'Items that could not be located', ''],
+          ['Items with Errors', '', 'Items that failed to process', ''],
+          ['Navigation Errors', '', 'Website navigation failures', ''],
+          ['Timeout Errors', '', 'Network/loading timeout failures', ''],
+          ['Items Moved to Available', '', 'Changed from backorder to available', ''],
+          ['Items Moved to Backorder', '', 'Changed from available to backorder', ''],
+          ['New Not Found Items', '', 'Items newly marked as not found', ''],
+          ['System Mode', '', 'Runtime environment', ''],
+          ['Next Run', '', 'Scheduled execution time', ''],
+          ['Last Updated', '', 'Timestamp of this status update', '']
         ];
 
         await this.sheets.spreadsheets.values.update({
           spreadsheetId: this.spreadsheetId,
-          range: 'Status!A1:B26',
+          range: 'Status!A1:D23',
           valueInputOption: 'RAW',
           resource: {
             values: statusData
@@ -296,40 +303,49 @@ class GoogleSheetsService {
         ? 'GitHub Actions - Daily at 1:00 AM EST'
         : 'Daily at 1:00 AM EST';
 
-      const statusValues = [
-        [timestamp], // B4 - Last Run Date & Time
-        [statusInfo.overallStatus], // B5 - Status
-        [statusInfo.durationMinutes], // B6 - Duration
-        [statusInfo.totalProcessed], // B7 - Total Items Processed
-        [''], // B8 - Empty
-        [''], // B9 - Empty  
-        [statusInfo.availableCount], // B10 - Items Available
-        [statusInfo.etaCount], // B11 - Items with ETA Info
-        [statusInfo.notFoundCount], // B12 - Items Not Found
-        [statusInfo.errorCount], // B13 - Items with Errors
-        [''], // B14 - Empty
-        [''], // B15 - Empty
-        [statusInfo.loginSuccess ? 'SUCCESS' : 'FAILED'], // B16 - Login Success
-        [statusInfo.navigationErrors], // B17 - Navigation Errors
-        [statusInfo.timeoutErrors], // B18 - Timeout Errors
-        [''], // B19 - Empty
-        [nextRun], // B20 - Next Scheduled Run
-        [process.env.DEV_MODE === 'true' ? 'Development' : process.env.GITHUB_ACTIONS === 'true' ? 'GitHub Actions' : 'Production'], // B21 - System Mode
-        [''], // B22 - Empty
-        [''], // B23 - Empty
-        [statusInfo.movedToAvailable || 0], // B24 - Items Moved to Available
-        [statusInfo.movedToBackorder || 0], // B25 - Items Moved to Backorder
-        [statusInfo.newNotFound || 0] // B26 - New Not Found Items
+      const systemMode = process.env.DEV_MODE === 'true' ? 'Development' : 
+                        process.env.GITHUB_ACTIONS === 'true' ? 'GitHub Actions' : 'Production';
+
+      // Update the Values column (B) and Last Updated column (D) 
+      const statusUpdates = [
+        ['B5', statusInfo.overallStatus, timestamp], // Last Run Status
+        ['B6', statusInfo.durationMinutes + ' minutes', timestamp], // Run Duration
+        ['B7', statusInfo.loginSuccess ? 'SUCCESS' : 'FAILED', timestamp], // Login Status
+        ['B8', statusInfo.totalProcessed, timestamp], // Items Processed
+        ['B9', statusInfo.availableCount, timestamp], // Items Available
+        ['B10', statusInfo.etaCount, timestamp], // Items on Backorder
+        ['B11', statusInfo.notFoundCount, timestamp], // Items Not Found
+        ['B12', statusInfo.errorCount, timestamp], // Items with Errors
+        ['B13', statusInfo.navigationErrors, timestamp], // Navigation Errors
+        ['B14', statusInfo.timeoutErrors, timestamp], // Timeout Errors
+        ['B15', statusInfo.movedToAvailable || 0, timestamp], // Items Moved to Available
+        ['B16', statusInfo.movedToBackorder || 0, timestamp], // Items Moved to Backorder
+        ['B17', statusInfo.newNotFound || 0, timestamp], // New Not Found Items
+        ['B18', systemMode, timestamp], // System Mode
+        ['B19', nextRun, timestamp], // Next Run
+        ['B20', timestamp, timestamp] // Last Updated
       ];
 
-      await this.sheets.spreadsheets.values.update({
-        spreadsheetId: this.spreadsheetId,
-        range: 'Status!B4:B26',
-        valueInputOption: 'RAW',
-        resource: {
-          values: statusValues
-        }
-      });
+      // Update each row individually for better control
+      for (const [cell, value, updateTime] of statusUpdates) {
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: this.spreadsheetId,
+          range: `Status!${cell}`,
+          valueInputOption: 'RAW',
+          resource: {
+            values: [[value]]
+          }
+        });
+
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: this.spreadsheetId,
+          range: `Status!D${cell.substring(1)}`,
+          valueInputOption: 'RAW',
+          resource: {
+            values: [[updateTime]]
+          }
+        });
+      }
 
       logger.info('Updated Status sheet with latest run information');
     } catch (error) {
