@@ -242,11 +242,11 @@ class GoogleSheetsService {
         // Add simple status structure to the Status sheet
         const statusData = [
           ['System Status', ''],
+          ['Login Status', ''],
           ['Last Scrape', ''],
           ['Last Scrape Duration', ''],
           ['Items "Not Found" in Last Scrape', ''],
           ['Items on Backorder', ''],
-          ['Login Status', ''],
           ['Total Items Processed', ''],
           ['Navigation Errors', ''],
           ['Timeout Errors', '']
@@ -298,14 +298,14 @@ class GoogleSheetsService {
         systemStatus = 'Warning - Network Issues';
       }
 
-      // Update only column B values
+      // Update column B values in the exact order you specified
       const statusValues = [
         [systemStatus], // B1 - System Status
-        [timestamp], // B2 - Last Scrape
-        [statusInfo.durationMinutes + ' minutes'], // B3 - Last Scrape Duration
-        [statusInfo.notFoundCount], // B4 - Items "Not Found" in Last Scrape
-        [statusInfo.etaCount], // B5 - Items on Backorder
-        [statusInfo.loginSuccess ? 'SUCCESS' : 'FAILED'], // B6 - Login Status
+        [statusInfo.loginSuccess ? 'Success' : 'Failed'], // B2 - Login Status
+        [timestamp], // B3 - Last Scrape
+        [statusInfo.durationMinutes + ' minutes'], // B4 - Last Scrape Duration
+        [statusInfo.notFoundCount], // B5 - Items "Not Found" in Last Scrape
+        [statusInfo.etaCount], // B6 - Items on Backorder
         [statusInfo.totalProcessed], // B7 - Total Items Processed
         [statusInfo.navigationErrors], // B8 - Navigation Errors
         [statusInfo.timeoutErrors] // B9 - Timeout Errors
