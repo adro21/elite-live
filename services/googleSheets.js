@@ -36,7 +36,7 @@ class GoogleSheetsService {
     }
   }
 
-  async getFabricData() {
+  async getFabricData(supplierFilter = null) {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -73,14 +73,15 @@ class GoogleSheetsService {
       const uniqueSuppliers = [...new Set(allData.map(item => item.supplier))];
       logger.info(`Found suppliers in sheet: ${uniqueSuppliers.join(', ')}`);
 
-      // Filter for only "Unique" supplier (case-insensitive, trimmed)
-      const uniqueData = allData.filter(item => 
-        item.supplier.toLowerCase() === 'unique'
+      // Filter for specific supplier if provided, otherwise default to "Unique"
+      const targetSupplier = supplierFilter || 'unique';
+      const filteredData = allData.filter(item => 
+        item.supplier.toLowerCase() === targetSupplier.toLowerCase()
       );
 
-      logger.info(`Found ${uniqueData.length} rows for Unique supplier out of ${allData.length} total rows`);
+      logger.info(`Found ${filteredData.length} rows for ${targetSupplier} supplier out of ${allData.length} total rows`);
       
-      return uniqueData;
+      return filteredData;
 
     } catch (error) {
       logger.error('Error fetching fabric data:', error);

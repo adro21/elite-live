@@ -85,105 +85,14 @@ class FabricStockChecker {
     const currentBackorderItems = [];
     
     try {
-      // Get fabric data from Google Sheets
-      const fabricData = await this.googleSheets.getFabricData();
-      logger.info(`Found ${fabricData.length} Unique fabrics to check`);
-
-      if (fabricData.length === 0) {
-        logger.info('No Unique fabrics found to check');
-        status.overallStatus = 'NO DATA';
-        return;
-      }
-
-      status.totalProcessed = fabricData.length;
-
       // Initialize scraper
       await this.fabricScraper.initialize();
 
-      // Login to Unique portal
-      try {
-        await this.fabricScraper.loginToUnique();
-        status.loginSuccess = true;
-        logger.info('Login successful');
-      } catch (loginError) {
-        status.loginSuccess = false;
-        status.overallStatus = 'LOGIN FAILED';
-        logger.error('Login failed:', loginError);
-        throw loginError;
-      }
+      // Process Unique fabrics
+      await this.processSupplierFabrics('unique', status, currentBackorderItems);
 
-      // Process each fabric
-      for (const fabric of fabricData) {
-        try {
-          logger.info(`Processing fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
-          
-          // Get current ETA value to track changes
-          const currentETA = fabric.currentETA || '';
-          
-          // Search for the fabric and get ETA info
-          const etaInfo = await this.fabricScraper.searchFabric(fabric);
-          
-          if (etaInfo === null) {
-            // ETA is null means the item is available - clear any existing ETA info
-            logger.info(`Fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: Available (clearing any previous ETA)`);
-            await this.googleSheets.updateFabricETA(fabric.rowIndex, '');
-            status.availableCount++;
-            
-            // Track if this was moved from backorder to available
-            if (currentETA && currentETA !== 'Not Found' && currentETA !== 'Error') {
-              status.movedToAvailable++;
-            }
-            
-          } else if (etaInfo === false) {
-            // etaInfo is false means fabric was not found
-            logger.warn(`Could not find fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
-            await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Not Found');
-            status.notFoundCount++;
-            
-            // Track if this is a new "Not Found"
-            if (currentETA !== 'Not Found') {
-              status.newNotFound++;
-            }
-            
-          } else {
-            // etaInfo contains actual ETA information (backorder, dates, etc.)
-            await this.googleSheets.updateFabricETA(fabric.rowIndex, etaInfo);
-            
-            // Add to current backorder items for syncing later
-            currentBackorderItems.push({
-              supplier: fabric.supplier,
-              supplierCollection: fabric.supplierCollection,
-              supplierPattern: fabric.supplierPattern,
-              supplierColor: fabric.supplierColor,
-              etaValue: etaInfo,
-              rawRow: fabric.rawRow
-            });
-            
-            logger.info(`Updated fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: ${etaInfo}`);
-            status.etaCount++;
-            
-            // Track if this was moved from available to backorder
-            if (!currentETA || currentETA === '') {
-              status.movedToBackorder++;
-            }
-          }
-          
-          // Add a small delay to avoid overwhelming the server
-          await this.delay(2000);
-          
-        } catch (error) {
-          logger.error(`Error processing fabric ${fabric.supplierPattern} - ${fabric.supplierColor}:`, error);
-          await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Error');
-          status.errorCount++;
-          
-          // Categorize error types
-          if (error.message.includes('timeout') || error.message.includes('Timeout')) {
-            status.timeoutErrors++;
-          } else if (error.message.includes('navigation') || error.message.includes('not found in sidebar')) {
-            status.navigationErrors++;
-          }
-        }
-      }
+      // Process Alendel fabrics
+      await this.processSupplierFabrics('alendel', status, currentBackorderItems);
 
       // Sync backorder sheet with current backorder items
       await this.googleSheets.syncBackorderSheet(currentBackorderItems);
@@ -219,6 +128,124 @@ class FabricStockChecker {
       } catch (statusError) {
         logger.error('Failed to update status sheet:', statusError);
       }
+    }
+  }
+
+  async processSupplierFabrics(supplierName, status, currentBackorderItems) {
+    try {
+      // Get fabric data from Google Sheets for this supplier
+      const fabricData = await this.googleSheets.getFabricData(supplierName);
+      logger.info(`Found ${fabricData.length} ${supplierName} fabrics to check`);
+
+      if (fabricData.length === 0) {
+        logger.info(`No ${supplierName} fabrics found to check`);
+        return;
+      }
+
+      status.totalProcessed += fabricData.length;
+
+      // Login to appropriate portal
+      try {
+        if (supplierName === 'unique') {
+          await this.fabricScraper.loginToUnique();
+        } else if (supplierName === 'alendel') {
+          await this.fabricScraper.loginToAlendel();
+        }
+        
+        // Only set login success if this is the first supplier processed
+        if (!status.loginSuccess) {
+          status.loginSuccess = true;
+        }
+        
+        logger.info(`${supplierName} login successful`);
+      } catch (loginError) {
+        status.loginSuccess = false;
+        status.overallStatus = 'LOGIN FAILED';
+        logger.error(`${supplierName} login failed:`, loginError);
+        throw loginError;
+      }
+
+      // Process each fabric
+      for (const fabric of fabricData) {
+        try {
+          logger.info(`Processing ${supplierName} fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
+          
+          // Get current ETA value to track changes
+          const currentETA = fabric.currentETA || '';
+          
+          // Search for the fabric and get ETA info
+          let etaInfo;
+          if (supplierName === 'unique') {
+            etaInfo = await this.fabricScraper.searchFabric(fabric);
+          } else if (supplierName === 'alendel') {
+            etaInfo = await this.fabricScraper.searchAlendelFabric(fabric);
+          }
+          
+          if (etaInfo === null) {
+            // ETA is null means the item is available - clear any existing ETA info
+            logger.info(`${supplierName} fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: Available (clearing any previous ETA)`);
+            await this.googleSheets.updateFabricETA(fabric.rowIndex, '');
+            status.availableCount++;
+            
+            // Track if this was moved from backorder to available
+            if (currentETA && currentETA !== 'Not Found' && currentETA !== 'Error') {
+              status.movedToAvailable++;
+            }
+            
+          } else if (etaInfo === false) {
+            // etaInfo is false means fabric was not found
+            logger.warn(`Could not find ${supplierName} fabric: ${fabric.supplierPattern} - ${fabric.supplierColor}`);
+            await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Not Found');
+            status.notFoundCount++;
+            
+            // Track if this is a new "Not Found"
+            if (currentETA !== 'Not Found') {
+              status.newNotFound++;
+            }
+            
+          } else {
+            // etaInfo contains actual ETA information (backorder, dates, etc.)
+            await this.googleSheets.updateFabricETA(fabric.rowIndex, etaInfo);
+            
+            // Add to current backorder items for syncing later
+            currentBackorderItems.push({
+              supplier: fabric.supplier,
+              supplierCollection: fabric.supplierCollection,
+              supplierPattern: fabric.supplierPattern,
+              supplierColor: fabric.supplierColor,
+              etaValue: etaInfo,
+              rawRow: fabric.rawRow
+            });
+            
+            logger.info(`Updated ${supplierName} fabric ${fabric.supplierPattern} - ${fabric.supplierColor}: ${etaInfo}`);
+            status.etaCount++;
+            
+            // Track if this was moved from available to backorder
+            if (!currentETA || currentETA === '') {
+              status.movedToBackorder++;
+            }
+          }
+          
+          // Add a small delay to avoid overwhelming the server
+          await this.delay(2000);
+          
+        } catch (error) {
+          logger.error(`Error processing ${supplierName} fabric ${fabric.supplierPattern} - ${fabric.supplierColor}:`, error);
+          await this.googleSheets.updateFabricETA(fabric.rowIndex, 'Error');
+          status.errorCount++;
+          
+          // Categorize error types
+          if (error.message.includes('timeout') || error.message.includes('Timeout')) {
+            status.timeoutErrors++;
+          } else if (error.message.includes('navigation') || error.message.includes('not found in sidebar')) {
+            status.navigationErrors++;
+          }
+        }
+      }
+
+    } catch (error) {
+      logger.error(`Error processing ${supplierName} fabrics:`, error);
+      throw error;
     }
   }
 
