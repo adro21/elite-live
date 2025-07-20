@@ -91,8 +91,8 @@ class FabricStockChecker {
       // Process Unique fabrics
       await this.processSupplierFabrics('unique', status, currentBackorderItems);
 
-      // Process Alendel fabrics
-      await this.processSupplierFabrics('alendel', status, currentBackorderItems);
+      // Process Alendel fabrics - DISABLED FOR NOW
+      // await this.processSupplierFabrics('alendel', status, currentBackorderItems);
 
       // Sync backorder sheet with current backorder items
       await this.googleSheets.syncBackorderSheet(currentBackorderItems);
