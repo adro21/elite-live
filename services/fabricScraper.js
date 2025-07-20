@@ -80,6 +80,83 @@ class FabricScraper {
     }
   }
 
+  async loginToAlendel() {
+    try {
+      const config = supplierConfigs.alendel;
+      
+      logger.info('Navigating to Alendel login page');
+      await this.page.goto(config.loginUrl, { 
+        waitUntil: 'domcontentloaded',
+        timeout: 60000 
+      });
+      
+      // Wait a bit for page to fully load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Wait for login form to load
+      await this.page.waitForSelector(config.usernameField, { timeout: 15000 });
+      
+      logger.info('Login form found, filling credentials');
+      
+      // Clear fields first
+      await this.page.click(config.usernameField);
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up('Control');
+      await this.page.keyboard.press('Delete');
+      
+      // Fill in credentials
+      await this.page.type(config.usernameField, 'agnes@elitewf.com');
+      await this.page.type(config.passwordField, 'elitewf2025');
+      
+      logger.info('Credentials entered, clicking login button');
+      
+      // Click login button with improved error handling
+      try {
+        await Promise.all([
+          this.page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: 45000 
+          }),
+          this.page.click(config.loginButton)
+        ]);
+      } catch (navError) {
+        logger.warn('Navigation after login click failed, checking if we are logged in anyway');
+        // Sometimes the navigation promise fails but login succeeds
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      
+      logger.info('Checking if login was successful');
+      
+      // Check if we're logged in by looking for the search input or other post-login elements
+      try {
+        await this.page.waitForSelector(config.postLoginNavigation.waitForSelector, { timeout: 15000 });
+        logger.info('Successfully logged into Alendel portal');
+      } catch (searchError) {
+        // Check if we're on a different page but still logged in
+        const currentUrl = this.page.url();
+        logger.info(`Current URL after login attempt: ${currentUrl}`);
+        
+        if (currentUrl.includes('alendel.com') && !currentUrl.includes('login')) {
+          logger.info('Login appears successful based on URL change');
+          // Try to find search input with different selector
+          const searchInput = await this.page.$('#small-searchterms');
+          if (searchInput) {
+            logger.info('Found search input, login confirmed');
+          } else {
+            throw new Error('Login may have failed - cannot find search input');
+          }
+        } else {
+          throw new Error('Login failed - still on login page or redirected unexpectedly');
+        }
+      }
+      
+    } catch (error) {
+      logger.error('Error during Alendel login:', error);
+      throw error;
+    }
+  }
+
 
   async searchFabric(fabricData) {
     try {
@@ -157,6 +234,117 @@ class FabricScraper {
       // Return to collections page for next search
       await this.returnToCollectionsPage();
       return false; // Error means not found
+    }
+  }
+
+  async searchAlendelFabric(fabricData) {
+    try {
+      const config = supplierConfigs.alendel;
+      const { supplierPattern, supplierColor } = fabricData;
+      
+      // Validate input data
+      if (!supplierPattern || supplierPattern.trim() === '') {
+        logger.warn('Empty supplier pattern provided, skipping search');
+        return false;
+      }
+      
+      if (!supplierColor || supplierColor.trim() === '') {
+        logger.warn('Empty supplier color provided, skipping search');
+        return false;
+      }
+      
+      logger.info(`Searching Alendel for fabric: ${supplierPattern} - ${supplierColor}`);
+      
+      // Clear search input and search for pattern
+      await this.page.click(config.selectors.searchInput);
+      await this.page.evaluate(() => {
+        const searchInput = document.querySelector('#small-searchterms');
+        if (searchInput) {
+          searchInput.value = '';
+        }
+      });
+      
+      // Type the search pattern
+      await this.page.type(config.selectors.searchInput, supplierPattern.trim());
+      
+      // Wait a moment before submitting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Submit search - look for both button and form submission
+      try {
+        await Promise.all([
+          this.page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: 30000 
+          }),
+          this.page.click(config.selectors.searchButton)
+        ]);
+      } catch (navError) {
+        logger.warn('Navigation after search failed, trying form submission');
+        // Try submitting by pressing Enter
+        await this.page.focus(config.selectors.searchInput);
+        await this.page.keyboard.press('Enter');
+        await this.page.waitForNavigation({ 
+          waitUntil: 'domcontentloaded',
+          timeout: 30000 
+        });
+      }
+      
+      // Wait for search results to load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Set page size to 96 if the selector exists
+      try {
+        // Wait longer for the page to fully load after search
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        
+        // Try to find the page size selector with retries
+        let pageSizeSelector = null;
+        for (let i = 0; i < 3; i++) {
+          pageSizeSelector = await this.page.$(config.selectors.pageSize);
+          if (pageSizeSelector) break;
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+        if (pageSizeSelector) {
+          logger.info('Found page size selector, setting to 96');
+          
+          // Check if the option 96 exists
+          const hasOption96 = await this.page.evaluate(() => {
+            const select = document.querySelector('#products-pagesize');
+            if (select) {
+              const options = Array.from(select.options);
+              return options.some(option => option.value === '96');
+            }
+            return false;
+          });
+          
+          if (hasOption96) {
+            await this.page.select(config.selectors.pageSize, '96');
+            await this.page.waitForNavigation({ 
+              waitUntil: 'domcontentloaded',
+              timeout: 30000 
+            });
+            logger.info('Page size set to 96 successfully');
+          } else {
+            logger.warn('Option 96 not found in page size selector');
+          }
+        } else {
+          logger.warn('Page size selector #products-pagesize not found');
+        }
+      } catch (pageSizeError) {
+        logger.warn('Could not set page size, proceeding with default:', pageSizeError.message);
+      }
+      
+      // Search through all pages for matching pattern and color
+      const stockInfo = await this.searchAlendelPages(supplierPattern, supplierColor);
+      
+      logger.info(`Alendel search result for ${supplierPattern} - ${supplierColor}: ${stockInfo}`);
+      return stockInfo;
+      
+    } catch (error) {
+      logger.error(`Error searching Alendel for fabric ${fabricData.supplierPattern} - ${fabricData.supplierColor}:`, error);
+      return false;
     }
   }
 
@@ -416,6 +604,165 @@ class FabricScraper {
     } catch (error) {
       logger.error('Error extracting ETA info:', error);
       return null;
+    }
+  }
+
+  async searchAlendelPages(supplierPattern, supplierColor) {
+    try {
+      const config = supplierConfigs.alendel;
+      let currentPage = 1;
+      const maxPages = 20;
+      
+      while (currentPage <= maxPages) {
+        logger.info(`Searching Alendel page ${currentPage} for ${supplierPattern} - ${supplierColor}`);
+        
+        // Get all product elements
+        const productElements = await this.page.$$(config.selectors.products);
+        
+        for (let productElement of productElements) {
+          // Look for the .sku element within each product
+          const skuElement = await productElement.$(config.selectors.productSku);
+          
+          if (skuElement) {
+            const skuText = await this.page.evaluate(el => el.textContent.trim(), skuElement);
+            
+            // Check if the SKU contains both pattern and color
+            if (skuText.toLowerCase().includes(supplierPattern.toLowerCase()) && 
+                skuText.toLowerCase().includes(supplierColor.toLowerCase())) {
+              
+              logger.info(`Found matching product SKU: ${skuText}`);
+              
+              // Find the picture link within the product element and click it
+              const pictureLink = await productElement.$(config.selectors.productPicture);
+              if (pictureLink) {
+                try {
+                  await Promise.all([
+                    this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }),
+                    pictureLink.click()
+                  ]);
+                  
+                  logger.info(`Successfully navigated to product page`);
+                  
+                  // Check stock status on product page
+                  const stockStatus = await this.checkAlendelStock();
+                  return stockStatus;
+                } catch (navError) {
+                  logger.error(`Navigation to product page failed: ${navError.message}`);
+                  return false;
+                }
+              } else {
+                logger.warn('Picture link not found in product element');
+                return false;
+              }
+            }
+          }
+        }
+        
+        // Try to go to next page
+        const nextPageExists = await this.goToNextAlendelPage();
+        if (!nextPageExists) {
+          logger.info(`No more pages available in Alendel search`);
+          break;
+        }
+        currentPage++;
+      }
+      
+      logger.info(`Product not found in Alendel search results`);
+      return false;
+      
+    } catch (error) {
+      logger.error('Error searching Alendel pages:', error);
+      return false;
+    }
+  }
+
+  async goToNextAlendelPage() {
+    try {
+      const config = supplierConfigs.alendel;
+      
+      // Check if next page button exists
+      const nextPageButton = await this.page.$(config.selectors.nextPage);
+      if (nextPageButton) {
+        const isDisabled = await this.page.evaluate(el => el.classList.contains('disabled'), nextPageButton);
+        if (!isDisabled) {
+          await Promise.all([
+            this.page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+            nextPageButton.click()
+          ]);
+          
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      logger.error('Error navigating to next Alendel page:', error);
+      return false;
+    }
+  }
+
+  async checkAlendelStock() {
+    try {
+      const config = supplierConfigs.alendel;
+      
+      // Wait for page to load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Log the current URL for debugging
+      const currentUrl = this.page.url();
+      logger.info(`Checking stock on URL: ${currentUrl}`);
+      
+      // Try different approaches to find the stock information
+      
+      // First try the direct stockquantity selector
+      const stockQuantityDirect = await this.page.$('.stockquantity');
+      if (stockQuantityDirect) {
+        const stockText = await this.page.evaluate(el => el.textContent.trim(), stockQuantityDirect);
+        logger.info(`Found stock quantity directly: "${stockText}"`);
+        
+        if (stockText.includes('Out of stock') || stockText.includes('OUT OF STOCK') || stockText === '') {
+          logger.info('Product is out of stock');
+          return stockText || 'Out of stock';
+        }
+        
+        // Return the stock value text (could be quantity or other stock info)
+        return stockText;
+      }
+      
+      // Try the full selector path
+      const stockContainer = await this.page.$(config.selectors.stockContainer);
+      if (stockContainer) {
+        logger.info('Found stock container using config selector');
+        
+        // Look for stockquantity element within the stock container
+        const stockQuantityElement = await stockContainer.$(config.selectors.stockQuantity);
+        if (stockQuantityElement) {
+          const stockText = await this.page.evaluate(el => el.textContent.trim(), stockQuantityElement);
+          
+          logger.info(`Found stock quantity: ${stockText}`);
+          
+          if (stockText.includes('Out of stock') || stockText.includes('OUT OF STOCK')) {
+            logger.info('Product is out of stock');
+            return stockText;
+          }
+          
+          // Return the stock value text (could be quantity or other stock info)
+          return stockText;
+        } else {
+          logger.warn('Stock container found but no stockquantity element inside');
+        }
+      } else {
+        logger.warn('Stock container not found using selector:', config.selectors.stockContainer);
+      }
+      
+      // If no stock container found, item might be available
+      logger.info('No stock container found - product might be available');
+      return null;
+      
+    } catch (error) {
+      logger.error('Error checking Alendel stock:', error);
+      return false;
     }
   }
 

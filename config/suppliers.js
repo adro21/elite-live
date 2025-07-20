@@ -26,16 +26,38 @@ const supplierConfigs = {
       sidebar: '#MenuPanelDiv',
       sidebarLinks: '#MenuPanelDiv .navClickable a'
     }
+  },
+  alendel: {
+    name: 'Alendel',
+    loginUrl: 'https://www.alendel.com/login?returnUrl=%2F',
+    usernameField: '#Email',
+    passwordField: '#Password',
+    loginButton: 'button[type="submit"]',
+    postLoginNavigation: {
+      searchSelector: '#small-searchterms',
+      waitForSelector: '#small-searchterms'
+    },
+    searchConfig: {
+      searchMethod: 'direct',
+      searchInputId: 'small-searchterms',
+      pageSizeSelector: '#products-pagesize',
+      pageSizeValue: '96'
+    },
+    selectors: {
+      searchInput: '#small-searchterms',
+      searchButton: 'button[type="submit"]',
+      pageSize: '#products-pagesize',
+      products: '.product-item',
+      productSku: '.sku',
+      productTitle: '.product-title a',
+      productPicture: '.picture a',
+      stockContainer: '.availability .stock',
+      stockQuantity: '.value .stockquantity',
+      pagination: '.pager',
+      nextPage: '.pager .next-page'
+    }
   }
   // Future suppliers can be added here with their specific configurations
-  // example: {
-  //   name: 'Example Supplier',
-  //   loginUrl: 'https://example.com/login',
-  //   usernameField: '#username',
-  //   passwordField: '#password',
-  //   loginButton: '#login-btn',
-  //   ...
-  // }
 };
 
 module.exports = supplierConfigs;
