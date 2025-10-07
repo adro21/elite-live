@@ -57,7 +57,7 @@ const supplierConfigs = {
       nextPage: '.pager .next-page'
     }
   }
-  // Future suppliers can be added here with their specific configurations
+  // Future suppliers can be added here with their specific configuration
 };
 
 module.exports = supplierConfigs;
