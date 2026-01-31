@@ -1,9 +1,10 @@
 name: Daily Fabric Stock Check
 
 on:
-  schedule:
-    # Run daily at 1 AM EST (6 AM UTC)
-    - cron: '0 6 * * *'
+  # DISABLED: Unique Fine Fabrics redesigned their website, selectors need updating
+  # schedule:
+  #   # Run daily at 1 AM EST (6 AM UTC)
+  #   - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:

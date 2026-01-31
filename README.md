@@ -2,6 +2,35 @@
 
 Automated fabric stock checking system that monitors supplier portals and updates Google Sheets with current availability and ETA information. Now runs on GitHub Actions for **completely free** operation.
 
+---
+
+## ⚠️ Current Status (January 2026)
+
+**GitHub Actions scheduled runs are DISABLED** until the following issues are resolved:
+
+### Unique Fine Fabrics - BROKEN
+- **Issue:** Unique Fine Fabrics redesigned their website, breaking all the scraper selectors
+- **Symptom:** `TimeoutError: Waiting for selector [name="ctl00$MainContent$LoginUser$UserName"] failed`
+- **Fix needed:** Visit the new login page, inspect the HTML, and update the selectors in `config/suppliers.js`
+- **Selectors to update:**
+  - `usernameField` - the login username input
+  - `passwordField` - the login password input
+  - `loginButton` - the login submit button
+  - Possibly also post-login navigation selectors and fabric search selectors
+
+### Alendel - DISABLED
+- **Status:** Code exists but is disabled (see git commit `3e63813`)
+- **Reason:** Was temporarily disabled while keeping code intact
+
+### To Resume Operations
+1. Visit the Unique Fine Fabrics portal manually and inspect the new login form
+2. Update `config/suppliers.js` with the new CSS selectors
+3. Test locally with `npm start`
+4. Uncomment the schedule trigger in `.github/workflows/fabric-stock-check.yml`
+5. Push changes and monitor the next GitHub Actions run
+
+---
+
 ## Features
 
 - **Free hosting on GitHub Actions** (no monthly costs)
